@@ -2,63 +2,81 @@
 <html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>YT Extractor - Admin + Player</title>
+<title>YT Extractor - Telegram DB</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen">
-<div id="app" class="max-w-5xl mx-auto p-4 md:p-8">
-  <h1 class="text-2xl font-bold">🎵 YT Extractor <span class="text-zinc-500 text-sm">Telegram DB</span></h1>
-  
-  <div class="mt-6 p-4 bg-zinc-900 rounded-xl">
+<body class="bg-zinc-950 text-zinc-100">
+<div id="app" class="max-w-3xl mx-auto p-4">
+  <h1 class="text-2xl font-bold">🎵 YT Extractor <span class="text-sm text-zinc-500">Telegram DB</span></h1>
+
+  <div class="mt-6 bg-zinc-900 p-4 rounded-2xl">
     <div class="flex gap-2">
-      <input v-model="q" placeholder="YouTube Video ID e.g. dQw4w9WgXcQ" class="flex-1 bg-zinc-800 rounded-lg px-4 py-2 outline-none">
-      <button @click="extract" :disabled="loading" class="bg-white text-black px-5 py-2 rounded-lg font-bold">{{loading?'...':'Play'}}</button>
+      <input v-model="q" @keyup.enter="doSearch" placeholder="Gaana name likho jaise 'Kesariya' ya Video ID" class="flex-1 bg-zinc-800 rounded-xl px-4 py-3 outline-none">
+      <button @click="doSearch" class="bg-white text-black px-6 rounded-xl font-bold">Search</button>
     </div>
-    <audio v-if="audioUrl" :src="audioUrl" controls autoplay class="w-full mt-4"></audio>
-    <p v-if="status" class="text-xs mt-2 text-zinc-400">{{status}}</p>
-  </div>
 
-  <div class="mt-6 grid grid-cols-3 gap-3">
-    <div class="bg-zinc-900 p-4 rounded-xl"><div class="text-zinc-500 text-xs">CACHED</div><div class="text-xl font-bold">{{stats.total||0}}</div></div>
-    <div class="bg-zinc-900 p-4 rounded-xl"><div class="text-zinc-500 text-xs">TOTAL HITS</div><div class="text-xl font-bold">{{stats.totalHits||0}}</div></div>
-    <div class="bg-zinc-900 p-4 rounded-xl"><div class="text-zinc-500 text-xs">DB SIZE</div><div class="text-xl font-bold">{{stats.blobUsedKB||0}} KB</div></div>
-  </div>
+    <div v-if="loading" class="text-xs text-zinc-400 mt-3">Loading...</div>
+    <div v-if="status" class="text-xs text-zinc-400 mt-3">{{status}}</div>
 
-  <div v-if="isAdmin" class="mt-8">
-    <h2 class="font-bold text-lg mb-3">🔧 Admin Panel</h2>
-    <div class="bg-zinc-900 rounded-xl overflow-hidden">
-      <table class="w-full text-sm">
-        <tr class="text-zinc-500 border-b border-zinc-800"><th class="p-3 text-left">ID</th><th>Title</th><th>Hits</th><th>Action</th></tr>
-        <tr v-for="s in list" :key="s.id" class="border-b border-zinc-800/50 hover:bg-zinc-800/50"><td class="p-3 font-mono text-xs">{{s.id}}</td><td class="p-3 truncate max-w-[200px]">{{s.title}}</td><td class="p-3">{{s.hits}}</td><td class="p-3"><button @click="del(s.id)" class="text-red-400 hover:text-red-300">Delete</button></td></tr>
-      </table>
+    <div v-if="results.length" class="mt-4 space-y-2">
+      <div v-for="v in results" :key="v.id" @click="play(v.id)" class="flex gap-3 p-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl cursor-pointer">
+        <img :src="v.thumbnail" class="w-20 h-14 rounded-lg object-cover bg-zinc-700">
+        <div class="flex-1 min-w-0"><div class="text-sm font-semibold truncate">{{v.title}}</div><div class="text-xs text-zinc-400">{{v.uploader}} • {{v.id}}</div></div>
+        <div class="text-xs bg-zinc-900 px-2 py-1 rounded h-fit">Play</div>
+      </div>
     </div>
+
+    <audio v-if="audioUrl" :src="audioUrl" controls autoplay class="w-full mt-4 rounded-lg"></audio>
+    <div v-if="audioUrl" class="text-[10px] text-zinc-500 mt-2 break-all">Playing via Telegram CDN: {{audioUrl}}</div>
   </div>
 
-  <p v-else class="mt-8 text-xs text-zinc-600">Add ?key=YOUR_ADMIN_KEY to URL to enable admin panel</p>
+  <div class="grid grid-cols-3 gap-3 mt-4">
+    <div class="bg-zinc-900 p-4 rounded-2xl"><div class="text-[10px] text-zinc-500">CACHED</div><div class="text-xl font-bold">{{stats.total||0}}</div></div>
+    <div class="bg-zinc-900 p-4 rounded-2xl"><div class="text-[10px] text-zinc-500">TOTAL HITS</div><div class="text-xl font-bold">{{stats.totalHits||0}}</div></div>
+    <div class="bg-zinc-900 p-4 rounded-2xl"><div class="text-[10px] text-zinc-500">DB SIZE</div><div class="text-xl font-bold">{{stats.blobUsedKB||0}} KB</div></div>
+  </div>
+
+  <div v-if="isAdmin" class="mt-6 bg-zinc-900 rounded-2xl p-4">
+    <h2 class="font-bold mb-2">Admin Panel</h2>
+    <div v-for="s in list" class="flex justify-between py-2 border-b border-zinc-800 text-sm"><span>{{s.id}} - {{s.title}}</span><button @click="del(s.id)" class="text-red-400">Delete</button></div>
+  </div>
 </div>
+
 <script>
 const {createApp} = Vue
 createApp({
-  data(){return {q:'', audioUrl:'', status:'', loading:false, stats:{}, list:[], isAdmin: new URLSearchParams(location.search).get('key')}},
+  data(){ return { q:'', results:[], audioUrl:'', status:'', loading:false, stats:{}, list:[], isAdmin: new URLSearchParams(location.search).get('key') } },
   async mounted(){
-    this.stats = await fetch('/api/stats').then(r=>r.json())
+    this.stats = await fetch('/api/stats').then(r=>r.json()).catch(()=>({}))
     if(this.isAdmin){
       const key = new URLSearchParams(location.search).get('key')
       this.list = await fetch(`/api/admin/list?key=${key}`).then(r=>r.json()).catch(()=>[])
     }
   },
   methods:{
-    async extract(){
+    async doSearch(){
       if(!this.q) return
-      this.loading=true; this.status='Checking Telegram cache...'
+      // if looks like videoId (11 chars), play directly
+      if(this.q.length===11 && !this.q.includes(' ')){
+        this.play(this.q); return
+      }
+      this.loading=true; this.status='Name se search ho raha hai...'
       try{
-        const r = await fetch(`/api/extract?id=${this.q.trim()}`).then(r=>r.json())
+        this.results = await fetch(`/api/search?q=${encodeURIComponent(this.q)}`).then(r=>r.json())
+        this.status = this.results.length ? `${this.results.length} results mile` : 'Kuch nahi mila'
+      }catch{ this.status='Search fail' }
+      this.loading=false
+    },
+    async play(id){
+      this.loading=true; this.status=`${id} Telegram cache check...`
+      try{
+        const r = await fetch(`/api/extract?id=${id}`).then(r=>r.json())
         if(r.error) throw r.error
-        this.status = r.status==='cache' ? `From Telegram Cache: ${r.title}` : `Fresh uploaded: ${r.title} - Save new DB_FILE_ID: ${r.newDbFileId}`
-        if(r.newDbFileId) console.log('UPDATE ENV DB_FILE_ID to', r.newDbFileId)
-        const file = await fetch(`/api/file?file_id=${r.telegram_file_id}`).then(r=>r)
-        this.audioUrl = file.url
+        this.status = r.status==='cache' ? `Cache se: ${r.title}` : `Fresh: ${r.title}`
+        // FIXED: use direct /api/file endpoint as src, not fetch().url
+        this.audioUrl = `/api/file?file_id=${r.telegram_file_id}`
+        if(r.newDbFileId) console.log('New DB_FILE_ID:', r.newDbFileId)
         this.stats = await fetch('/api/stats').then(r=>r.json())
       }catch(e){ this.status='Error: '+e }
       this.loading=false
