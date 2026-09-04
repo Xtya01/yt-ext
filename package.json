@@ -1,0 +1,7 @@
+{
+  "name": "yt-extractor-telegram-db",
+  "type": "module",
+  "dependencies": {
+    "hono": "^4.7.0"
+  }
+}
