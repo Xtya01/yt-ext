@@ -52,29 +52,31 @@ app.get('/api/search', async (c)=>{
   const INSTANCES = [
     'https://yewtu.be',
     'https://inv.tux.pizza',
-    'https://invidious.privacydev.net',
-    'https://inv.nadeko.net',
-    'https://iv.melmac.space'
+    'https://inv.nadeko.net'
   ]
 
-  for(const base of INSTANCES){
-    try{
-      const r = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(8000)
-      })
-      if(!r.ok) continue
-      const data = await r.json()
-      const items = (data || []).slice(0,12).map((v:any)=>({
-        id: v.videoId,
-        title: v.title,
-        thumbnail: `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
-        uploader: v.author || ''
-      })).filter((x:any)=>x.id)
-      if(items.length) return c.json(items)
-    }catch{}
+  const tryOne = async (base: string) => {
+    const r = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(q)}&type=video`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(3500)
+    })
+    if(!r.ok) throw 'fail'
+    const data = await r.json()
+    return (data || []).slice(0,10).map((v:any)=>({
+      id: v.videoId,
+      title: v.title,
+      thumbnail: `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
+      uploader: v.author || ''
+    })).filter((x:any)=>x.id)
   }
-  return c.json([], 500)
+
+  try{
+    // jo bhi instance sabse pehle jawab de
+    const result = await Promise.any(INSTANCES.map(b => tryOne(b)))
+    if(result.length) return c.json(result)
+  }catch{}
+
+  return c.json([])
 })
 
 app.get('/api/stats', async (c)=>{
