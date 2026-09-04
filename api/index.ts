@@ -116,7 +116,7 @@ app.get('/api/admin/list', async (c)=>{
 
 app.get('/api/admin/delete', async (c)=>{
   if(c.req.query('key')!==ADMIN) return c.text('unauthorized',401)
-  const id = c.req.query('id')
+  const id = c.req.query('id') 
   let db = await getDb()
   db = db.filter(x=>x.id!==id)
   await saveDb(db)
