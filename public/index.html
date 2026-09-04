@@ -1,0 +1,31 @@
+<div id="app">
+  <h2>Search</h2>
+  <input v-model="q"><button @click="play">Play</button>
+  <audio v-if="audio" :src="audio" controls></audio>
+
+  <hr v-if="isAdmin">
+  <h2 v-if="isAdmin">Admin Panel - {{stats.total}} Songs</h2>
+  <table v-if="isAdmin"><tr v-for="s in list"><td>{{s.id}}</td><td>{{s.hits}}</td></tr></table>
+</div>
+
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+const {createApp} = Vue
+createApp({
+  data(){return {q:'', audio:'', list:[], stats:{}, isAdmin: new URLSearchParams(location.search).get('key')!==null }},
+  async mounted(){
+    this.stats = await fetch('/api/stats').then(r=>r.json())
+    if(this.isAdmin){
+      const key = new URLSearchParams(location.search).get('key')
+      this.list = await fetch(`/api/admin/list?key=${key}`).then(r=>r.json())
+    }
+  },
+  methods:{
+    async play(){
+      const res = await fetch(`/api/extract?id=${this.q}`).then(r=>r.json())
+      // file_id se direct stream ke liye /api/file/:id route bana lena
+      this.audio = `https://api.telegram.org/file/bot<TOKEN>/${res.telegram_file_id}` 
+    }
+  }
+}).mount('#app')
+</script>
