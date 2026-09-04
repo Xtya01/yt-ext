@@ -67,16 +67,25 @@ app.get('/api/stats', async (c)=>{
 app.get('/api/search', async (c)=>{
   const q = c.req.query('q')
   if(!q) return c.json([])
-  try{
-    const r = await fetch(`https://pipedapi.kavin.rocks/search?q=${encodeURIComponent(q)}&filter=videos`).then(r=>r.json())
-    const items = (r.items || r || []).slice(0,12).map((v:any)=>({
-      id: (v.url?.split('v=')[1] || v.url?.split('/')[3] || v.id || '').split('&')[0],
-      title: v.title,
-      thumbnail: v.thumbnail || `https://i.ytimg.com/vi/${v.url?.split('v=')[1]}/hqdefault.jpg`,
-      uploader: v.uploaderName || v.uploader || ''
-    })).filter((x:any)=>x.id)
-    return c.json(items)
-  }catch(e){ return c.json([]) }
+  const INSTANCES = [
+    'https://pipedapi.syncpundit.io',
+    'https://api.piped.private.coffee',
+    'https://pipedapi.leptos.xyz',
+    'https://pipedapi.kavin.rocks'
+  ]
+  for(const base of INSTANCES){
+    try{
+      const r = await fetch(`${base}/search?q=${encodeURIComponent(q)}&filter=videos`, {signal: AbortSignal.timeout(6000)}).then(r=>r.json())
+      const items = (r.items||[]).slice(0,12).map((v:any)=>({
+        id: v.url?.split('v=')[1]?.split('&')[0] || v.url?.split('/').pop(),
+        title: v.title,
+        thumbnail: v.thumbnail,
+        uploader: v.uploaderName || ''
+      })).filter((x:any)=>x.id)
+      if(items.length) return c.json(items)
+    }catch{}
+  }
+  return c.json([])
 })
 
 app.get('/api/extract', async (c)=>{
