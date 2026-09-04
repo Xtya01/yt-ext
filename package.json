@@ -1,5 +1,5 @@
 {
-  "name": "yt-extractor-telegram-db",
+  "name": "yt-extractor",
   "type": "module",
   "dependencies": {
     "hono": "^4.7.0"
