@@ -1,6 +1,9 @@
 {
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.ts" },
-    { "source": "/(.*)", "destination": "/public/index.html" }
+    { "source": "/api/search", "destination": "/api/index.ts" },
+    { "source": "/api/extract", "destination": "/api/index.ts" },
+    { "source": "/api/stats", "destination": "/api/index.ts" },
+    { "source": "/api/file", "destination": "/api/index.ts" },
+    { "source": "/api/ping", "destination": "/api/index.ts" }
   ]
 }
