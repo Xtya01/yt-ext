@@ -33,68 +33,39 @@ export default async function handler(req: any, res: any) {
     } catch { return null }
   }
 
-  const getAudioFromWatchPage = async (vid: string) => {
+  const getAudio = async (vid: string) => {
+    // WATCH PAGE
     try {
-      log(`Trying WATCH PAGE scrape -> ${vid} cookie:${YT_COOKIE?'yes':'no'}`)
+      log(`WATCH PAGE try`)
       const headers: any = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
       }
       if (YT_COOKIE) headers['Cookie'] = YT_COOKIE
-
-      const html = await fetch(`https://www.youtube.com/watch?v=${vid}&bpctr=9999999999&has_verified=1`, { headers, signal: AbortSignal.timeout(10000) }).then(r=>r.text())
-      log(`HTML length: ${html.length}`)
-
-      // Method 1: ytInitialPlayerResponse
-      let match = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/)
-      if (!match) match = html.match(/var ytInitialPlayerResponse = ({.+?});/)
-      if (match) {
-        const j = JSON.parse(match[1])
-        log(`Found ytInitialPlayerResponse status:${j.playabilityStatus?.status}`)
-        const formats = [...(j.streamingData?.adaptiveFormats||[]),...(j.streamingData?.formats||[])]
-        const audios = formats.filter((f:any)=>f.mimeType?.includes('audio')).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
-        log(`WatchPage audios: ${audios.length}`)
-        if (audios[0]?.url) return { url: audios[0].url, title: j.videoDetails?.title || vid }
+      const html = await fetch(`https://www.youtube.com/watch?v=${vid}`, { headers }).then(r=>r.text())
+      const m = html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/)
+      if (m) {
+        const j = JSON.parse(m[1])
+        const fmts = [...(j.streamingData?.adaptiveFormats||[]),...(j.streamingData?.formats||[])]
+        const aud = fmts.filter((f:any)=>f.mimeType?.includes('audio') && f.url).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
+        log(`WATCH PAGE audios url wale: ${aud.length}`)
+        if (aud[0]?.url) return { url: aud[0].url, title: j.videoDetails?.title }
       }
+    } catch(e:any){ log(`watch fail ${e.message}`) }
 
-      // Method 2: ytInitialData se bhi try
-      log(`No playerResponse, trying to find streamingData in html`)
-      const streamMatch = html.match(/"adaptiveFormats":(\[.+?\])/)
-      if (streamMatch) {
-        const fmts = JSON.parse(streamMatch[1])
-        const audios = fmts.filter((f:any)=>f.mimeType?.includes('audio')).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
-        if (audios[0]?.url) { log(`Found via adaptiveFormats regex`); return { url: audios[0].url, title: vid } }
-      }
-
-    } catch(e:any){ log(`WatchPage fail: ${e.message}`) }
-    return null
-  }
-
-  const getAudioViaYoutubeI = async (vid: string) => {
-    const key = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39"
-    const clients = [
-      { clientName: "ANDROID_MUSIC", clientVersion: "6.34.51", androidSdkVersion: 30 },
-      { clientName: "ANDROID", clientVersion: "20.09.36", androidSdkVersion: 30 },
-    ]
-    const baseHeaders: any = { 'Content-Type': 'application/json', 'User-Agent': 'com.google.android.apps.youtube.music/6.34.51 (Linux; U; Android 13)' }
-    if (YT_COOKIE) baseHeaders['Cookie'] = YT_COOKIE
-
-    for (const c of clients) {
-      try {
-        log(`Trying YouTubei ${c.clientName}`)
-        const r = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${key}`, {
-          method: 'POST',
-          headers: baseHeaders,
-          body: JSON.stringify({ context: { client: {...c, gl: "US", hl: "en" } }, videoId: vid }),
-          signal: AbortSignal.timeout(7000)
-        })
-        const j: any = await r.json()
-        log(`YouTubei ${c.clientName} status:${j.playabilityStatus?.status}`)
-        const formats = [...(j.streamingData?.adaptiveFormats||[])]
-        const audios = formats.filter((f:any)=>f.mimeType?.includes('audio')).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
-        if (audios[0]?.url) return { url: audios[0].url, title: j.videoDetails?.title || vid }
-      } catch(e:any){ log(`YouTubei ${c.clientName} fail: ${e.message}`) }
-    }
+    // ANDROID
+    try {
+      log(`ANDROID try`)
+      const r = await fetch(`https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'com.google.android.youtube/20.09.36 (Linux; U; Android 13)' },
+        body: JSON.stringify({ context: { client: { clientName: "ANDROID", clientVersion: "20.09.36", androidSdkVersion: 30, gl: "US", hl: "en" } }, videoId: vid })
+      }).then(r=>r.json())
+      const fmts = r.streamingData?.adaptiveFormats||[]
+      const aud = fmts.filter((f:any)=>f.mimeType?.includes('audio') && f.url).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
+      log(`ANDROID audios: ${aud.length} status:${r.playabilityStatus?.status}`)
+      if (aud[0]?.url) return { url: aud[0].url, title: r.videoDetails?.title }
+    } catch(e:any){ log(`android fail ${e.message}`) }
     return null
   }
 
@@ -102,35 +73,44 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   try {
-    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', cookie: YT_COOKIE?'set':'missing', method: 'watchpage+android_music' })
-
     if (path.includes('/api/extract')) {
       if (!id) return res.status(400).json({ error: 'id required', logs })
       let db = await getDb()
       const found = db.find(x=>x.id===id)
       if (found) return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, logs })
 
-      // 1. Watch page pehle (bina cookie bhi chal sakta hai)
-      let result = await getAudioFromWatchPage(id)
-      // 2. YouTubei
-      if (!result) result = await getAudioViaYoutubeI(id)
+      const result = await getAudio(id)
+      if (!result) throw new Error('no audio found')
+      log(`Got final audio url`)
 
-      if (!result) throw new Error('no audio url from both methods')
+      // VERCEL PE DIRECT DOWNLOAD - FIX
+      try {
+        log(`Downloading googlevideo...`)
+        const audioRes = await fetch(result.url, {
+          headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': '*/*' },
+        })
+        log(`Audio fetch status: ${audioRes.status} len:${audioRes.headers.get('content-length')}`)
+        if (!audioRes.ok) throw new Error(`audio fetch ${audioRes.status}`)
+        const ab = await audioRes.arrayBuffer()
+        log(`Downloaded ${ab.byteLength} bytes`)
 
-      log(`Got audio: ${result.url.slice(0,100)}`)
-      if (!BOT ||!CHAT) return res.status(200).json({ status: 'direct', direct_url: result.url, title: result.title, logs })
+        const fd = new FormData()
+        fd.append('chat_id', CHAT)
+        fd.append('audio', new Blob([ab], { type: 'audio/webm' }), `${id}.webm`)
+        fd.append('title', result.title || id)
+        const tr = await tg('sendAudio', fd)
+        log(`TG sendAudio ok:${tr.ok} err:${JSON.stringify(tr).slice(0,300)}`)
+        if (!tr.ok) throw new Error(`tg fail ${JSON.stringify(tr)}`)
 
-      const buf = await fetch(result.url, { signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer()).catch(()=>null)
-      if (!buf) return res.status(200).json({ status: 'direct_no_dl', direct_url: result.url, logs })
-
-      const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`)
-      const tr = await tg('sendAudio', fd)
-      if (!tr.ok) return res.status(200).json({ status: 'direct_tg_fail', direct_url: result.url, tg_error: tr, logs })
-
-      const file_id2 = tr.result.audio?.file_id
-      db.push({ id, file_id: file_id2, title: result.title, hits: 1 })
-      await saveDb(db)
-      return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, title: result.title, logs })
+        const file_id2 = tr.result.audio?.file_id || tr.result.document?.file_id
+        db.push({ id, file_id: file_id2, title: result.title, hits: 1 })
+        await saveDb(db)
+        return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, logs })
+      } catch(dlErr:any) {
+        log(`Download/upload failed: ${dlErr.message}`)
+        // fallback - direct play ke liye de de
+        return res.status(200).json({ status: 'direct_no_dl', direct_url: result.url, title: result.title, error: dlErr.message, logs })
+      }
     }
     return res.status(200).json({ ok: true })
   } catch(e:any){
