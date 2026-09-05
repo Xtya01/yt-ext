@@ -8,7 +8,6 @@ export default async function handler(req: any, res: any) {
   const BOT = process.env.BOT_TOKEN || ''
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
-  const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
@@ -35,43 +34,44 @@ export default async function handler(req: any, res: any) {
   }
 
   const getAudioDirect = async (vid: string) => {
-    const pipedApis = [
-      "https://pipedapi.kavin.rocks",
-      "https://api.piped.private.coffee",
-      "https://pipedapi.adminforge.de",
-      "https://pipedapi.syncpundit.io"
+    const key = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39"
+    const clients = [
+      { clientName: "ANDROID", clientVersion: "20.09.36", androidSdkVersion: 30 },
+      { clientName: "WEB", clientVersion: "2.20240726.00.00" },
+      { clientName: "MWEB", clientVersion: "2.20241202.01.00" }
     ]
-    // 1. DIRECT Piped
-    for (const api of pipedApis) {
+    for (const c of clients) {
       try {
-        log(`Trying PIPED DIRECT -> ${api}/streams/${vid}`)
-        const r = await fetch(`${api}/streams/${vid}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(7000) })
+        log(`Trying YouTubei -> ${c.clientName}`)
+        const body = {
+          context: { client: c, user: { lockedSafetyMode: false } },
+          videoId: vid,
+          playbackContext: { contentPlaybackContext: { html5Preference: "HTML5_PREF_OVER_OTHER" } }
+        }
+        const r = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${key}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(8000)
+        })
         const j: any = await r.json()
-        log(`Piped title: ${j.title?.slice(0,40)} audios:${j.audioStreams?.length}`)
-        const best = (j.audioStreams || []).sort((a:any,b:any)=>b.bitrate-a.bitrate)[0]
-        if (best?.url) { log(`SUCCESS via ${api}`); return { url: best.url, title: j.title || vid } }
-      } catch(e:any){ log(`Piped fail ${api}: ${e.message}`) }
+        const formats = [...(j.streamingData?.adaptiveFormats||[]),...(j.streamingData?.formats||[])]
+        log(`Formats found: ${formats.length} status:${j.playabilityStatus?.status}`)
+        const audios = formats.filter((f:any)=>f.mimeType?.includes('audio')).sort((a:any,b:any)=>(b.bitrate||0)-(a.bitrate||0))
+        log(`Audios: ${audios.length} first: ${audios[0]?.mimeType}`)
+        if (audios[0]?.url) { log(`SUCCESS via ${c.clientName}`); return { url: audios[0].url, title: j.videoDetails?.title || vid } }
+        // kabhi kabhi cipher hota hai
+        if (audios[0]?.signatureCipher) log(`Cipher found, need decipher - trying next client`)
+      } catch(e:any){ log(`YouTubei fail ${c.clientName}: ${e.message}`) }
     }
-    // 2. Via Worker
-    for (const api of pipedApis) {
-      try {
-        const target = `${api}/streams/${vid}`
-        const proxied = WORKER + encodeURIComponent(target)
-        log(`Trying via worker -> ${api}`)
-        const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) })
-        const j: any = await r.json()
-        const best = (j.audioStreams || []).sort((a:any,b:any)=>b.bitrate-a.bitrate)[0]
-        if (best?.url) return { url: best.url, title: j.title || vid }
-      } catch(e:any){ log(`Worker piped fail ${api}: ${e.message}`) }
-    }
-    throw new Error('no audio url from piped')
+    throw new Error('no audio url from youtubei')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   try {
-    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'piped-direct' })
+    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'youtubei' })
 
     if (path.includes('/api/search')) {
       if (!q) return res.status(200).json([])
@@ -85,19 +85,14 @@ export default async function handler(req: any, res: any) {
       let db = await getDb()
       const found = db.find(x=>x.id===id)
       if (found) return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, logs })
-
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Got audio: ${aUrl.slice(0,80)}`)
-
+      log(`Got audio: ${aUrl.slice(0,100)}`)
       if (!BOT ||!CHAT) return res.status(200).json({ status: 'direct', direct_url: aUrl, title, logs })
-
-      const buf = await fetch(aUrl, { signal: AbortSignal.timeout(15000) }).then(r=>r.arrayBuffer()).catch(()=>null)
+      const buf = await fetch(aUrl, { signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer()).catch(()=>null)
       if (!buf) return res.status(200).json({ status: 'direct_no_dl', direct_url: aUrl, logs })
-
       const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`)
       const tr = await tg('sendAudio', fd)
       if (!tr.ok) return res.status(200).json({ status: 'direct_tg_fail', direct_url: aUrl, tg_error: tr, logs })
-
       const file_id2 = tr.result.audio?.file_id
       db.push({ id, file_id: file_id2, title, hits: 1 })
       await saveDb(db)
