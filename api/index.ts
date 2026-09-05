@@ -8,7 +8,6 @@ export default async function handler(req: any, res: any) {
   const BOT = process.env.BOT_TOKEN || ''
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
-  const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
@@ -29,41 +28,32 @@ export default async function handler(req: any, res: any) {
       fd.append('chat_id', CHAT)
       fd.append('document', new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }), 'database.json')
       const r = await tg('sendDocument', fd)
-      if (r.ok) { DB_FILE_ID = r.result.document.file_id }
+      if (r.ok) DB_FILE_ID = r.result.document.file_id
       return DB_FILE_ID
     } catch { return null }
   }
 
   const getAudioDirect = async (vid: string) => {
-    const ytUrl = `https://www.youtube.com/watch?v=${vid}`
-    const payload = { url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }
-    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
-
-    // Sirf 2 try - fast
-    const tries = [
-      { url: "https://api.zarz.moe/v1/dl/cobalt", via: "direct" },
-      { url: WORKER + encodeURIComponent("https://api.zarz.moe/v1/dl/cobalt"), via: "worker" }
-    ]
-    for (const t of tries) {
+    const invs = ["https://inv.tux.pizza", "https://yewtu.be", "https://invidious.snopyta.org"]
+    for (const inv of invs) {
       try {
-        log(`Trying ${t.via} -> ${t.url.slice(0,40)}`)
-        const r = await fetch(t.url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) })
-        const txt = await r.text()
-        log(`Response ${t.via}: ${txt.slice(0,200)}`)
-        let j: any = null
-        try { j = JSON.parse(txt) } catch { continue }
-        const audioUrl = j.url || j.data?.url || j.result?.url
-        if (audioUrl) return { url: audioUrl, title: j.filename || vid }
-      } catch(e:any){ log(`${t.via} fail: ${e.message}`) }
+        log(`Trying INV DIRECT -> ${inv}/api/v1/videos/${vid}`)
+        const r = await fetch(`${inv}/api/v1/videos/${vid}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) })
+        const j: any = await r.json()
+        log(`INV response: ${j.title?.slice(0,50)} formats:${j.adaptiveFormats?.length}`)
+        const audios = (j.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
+        if (audios[0]?.url) { log(`SUCCESS via ${inv}`); return { url: audios[0].url, title: j.title || vid } }
+        log(`No audio in ${inv}`)
+      } catch(e:any){ log(`INV fail ${inv}: ${e.message}`) }
     }
-    throw new Error('no audio url')
+    throw new Error('no audio url from invidious')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   try {
-    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', time: Date.now() })
+    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'invidious-direct' })
 
     if (path.includes('/api/search')) {
       if (!q) return res.status(200).json([])
@@ -79,10 +69,9 @@ export default async function handler(req: any, res: any) {
       if (found) return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, logs })
 
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Got audio url: ${aUrl.slice(0,80)}`)
+      log(`Got audio: ${aUrl.slice(0,80)}`)
 
-      // Agar BOT nahi hai to direct url hi de de taaki pata chale kaam kar raha hai
-      if (!BOT || !CHAT) return res.status(200).json({ status: 'direct', direct_url: aUrl, title, logs })
+      if (!BOT ||!CHAT) return res.status(200).json({ status: 'direct', direct_url: aUrl, title, logs })
 
       const buf = await fetch(aUrl, { signal: AbortSignal.timeout(15000) }).then(r=>r.arrayBuffer()).catch(()=>null)
       if (!buf) return res.status(200).json({ status: 'direct_no_dl', direct_url: aUrl, logs })
@@ -96,7 +85,6 @@ export default async function handler(req: any, res: any) {
       await saveDb(db)
       return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, title, logs })
     }
-
     return res.status(200).json({ ok: true })
   } catch(e:any){
     return res.status(500).json({ error: e.message, logs })
