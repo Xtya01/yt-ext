@@ -8,6 +8,7 @@ export default async function handler(req: any, res: any) {
   const BOT = process.env.BOT_TOKEN || ''
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
+  const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
@@ -34,26 +35,43 @@ export default async function handler(req: any, res: any) {
   }
 
   const getAudioDirect = async (vid: string) => {
-    const invs = ["https://inv.tux.pizza", "https://yewtu.be", "https://invidious.snopyta.org"]
-    for (const inv of invs) {
+    const pipedApis = [
+      "https://pipedapi.kavin.rocks",
+      "https://api.piped.private.coffee",
+      "https://pipedapi.adminforge.de",
+      "https://pipedapi.syncpundit.io"
+    ]
+    // 1. DIRECT Piped
+    for (const api of pipedApis) {
       try {
-        log(`Trying INV DIRECT -> ${inv}/api/v1/videos/${vid}`)
-        const r = await fetch(`${inv}/api/v1/videos/${vid}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) })
+        log(`Trying PIPED DIRECT -> ${api}/streams/${vid}`)
+        const r = await fetch(`${api}/streams/${vid}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(7000) })
         const j: any = await r.json()
-        log(`INV response: ${j.title?.slice(0,50)} formats:${j.adaptiveFormats?.length}`)
-        const audios = (j.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
-        if (audios[0]?.url) { log(`SUCCESS via ${inv}`); return { url: audios[0].url, title: j.title || vid } }
-        log(`No audio in ${inv}`)
-      } catch(e:any){ log(`INV fail ${inv}: ${e.message}`) }
+        log(`Piped title: ${j.title?.slice(0,40)} audios:${j.audioStreams?.length}`)
+        const best = (j.audioStreams || []).sort((a:any,b:any)=>b.bitrate-a.bitrate)[0]
+        if (best?.url) { log(`SUCCESS via ${api}`); return { url: best.url, title: j.title || vid } }
+      } catch(e:any){ log(`Piped fail ${api}: ${e.message}`) }
     }
-    throw new Error('no audio url from invidious')
+    // 2. Via Worker
+    for (const api of pipedApis) {
+      try {
+        const target = `${api}/streams/${vid}`
+        const proxied = WORKER + encodeURIComponent(target)
+        log(`Trying via worker -> ${api}`)
+        const r = await fetch(proxied, { signal: AbortSignal.timeout(8000) })
+        const j: any = await r.json()
+        const best = (j.audioStreams || []).sort((a:any,b:any)=>b.bitrate-a.bitrate)[0]
+        if (best?.url) return { url: best.url, title: j.title || vid }
+      } catch(e:any){ log(`Worker piped fail ${api}: ${e.message}`) }
+    }
+    throw new Error('no audio url from piped')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   try {
-    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'invidious-direct' })
+    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'piped-direct' })
 
     if (path.includes('/api/search')) {
       if (!q) return res.status(200).json([])
