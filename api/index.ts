@@ -37,12 +37,19 @@ export default async function handler(req: any, res: any) {
     } catch { return null }
   }
 
-  // FINAL FIX: Cobalt v10 root endpoint
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
 
-    // 1) NEW Cobalt v10 - POST to root /
-    for (const api of ['https://api.cobalt.tools', 'https://co.wuk.sh']) {
+    // Community instances jo JWT nahi mangte - ye list cobalt.directory se hai
+    const cobaltInstances = [
+      'https://api.ayaka.one',
+      'https://co.ayaka.one',
+      'https://cobalt.canine.tools',
+      'https://api.cobalt.squair.xyz',
+      'https://cobalt-api.kwiatekmiki.com'
+    ]
+
+    for (const api of cobaltInstances) {
       try {
         log(`Trying Cobalt v10 ${api}`)
         const r = await fetch(api, {
@@ -62,40 +69,34 @@ export default async function handler(req: any, res: any) {
           signal: AbortSignal.timeout(10000)
         })
         const txt = await r.text()
-        if (txt.trim().startsWith('<!DOCTYPE') || txt.trim().startsWith('<html')) {
-          log(`Cobalt ${api} returned HTML`)
-          continue
-        }
+        log(`${api} status ${r.status}: ${txt.slice(0,300)}`)
+        if (txt.trim().startsWith('<')) continue
         const j = JSON.parse(txt)
         if (j.url) {
-          log(`Cobalt v10 success ${api}`)
+          log(`Success ${api}`)
           return { url: j.url, title: vid }
         }
-        log(`Cobalt ${api} no url: ${txt.slice(0,200)}`)
       } catch(e:any){
-        log(`Cobalt ${api} err: ${e.message}`)
+        log(`Fail ${api}: ${e.message}`)
       }
     }
 
-    // 2) Piped fallback
-    for (const base of ['https://pipedapi.kavin.rocks', 'https://pipedapi.syncpundit.io', 'https://api.piped.private.coffee']) {
+    // Fallback Piped
+    for (const base of ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee']) {
       try {
         log(`Trying Piped ${base}`)
         const j = await fetch(`${base}/streams/${vid}`, { signal: AbortSignal.timeout(6000) }).then(r=>r.json())
-        if (j.audioStreams?.[0]?.url) {
-          log(`Piped success ${base}`)
-          return { url: j.audioStreams[0].url, title: j.title || vid }
-        }
+        if (j.audioStreams?.[0]?.url) return { url: j.audioStreams[0].url, title: j.title || vid }
       } catch(e:any){ log(`Piped ${base} err: ${e.message}`) }
     }
 
-    throw new Error('no audio url')
+    throw new Error('no audio url - all community instances failed, host own cobalt')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', logs })
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok' })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
@@ -118,9 +119,7 @@ export default async function handler(req: any, res: any) {
     }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Downloading ${aUrl.slice(0,60)}...`)
       const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer())
-      log(`Size ${buf.byteLength}`)
       const fd = new FormData()
       fd.append('chat_id', CHAT)
       fd.append('audio', new Blob([buf], { type: 'audio/mp4' }), `${id}.m4a`)
