@@ -41,32 +41,36 @@ export default async function handler(req: any, res: any) {
 
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
-    const cobaltList = [
+    const bases = [
       "https://api.ayaka.one",
-      "https://co.ayaka.one",
+      "https://co.wuk.sh",
       "https://cobalt.canine.tools",
       "https://api.cobalt.squair.xyz",
-      "https://co.wuk.sh",
       "https://api.cobalt.sqir.xyz"
     ]
-    for (const api of cobaltList) {
-      try {
-        log(`Trying via worker -> ${api}`)
-        const proxied = WORKER + encodeURIComponent(api)
-        const r = await fetch(proxied, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3' }),
-          signal: AbortSignal.timeout(12000)
-        })
-        const j = await r.json().catch(()=>null)
-        if (j?.url) {
-          log(`Success via ${api}`)
-          return { url: j.url, title: j.filename || vid }
+    for (const base of bases) {
+      for (const p of ["/api/json", ""]) {
+        try {
+          const fullApi = base + p
+          const proxied = WORKER + encodeURIComponent(fullApi)
+          log(`Trying via worker -> ${fullApi}`)
+          const r = await fetch(proxied, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
+            signal: AbortSignal.timeout(12000)
+          })
+          const text = await r.text()
+          let j: any = null
+          try { j = JSON.parse(text) } catch { log(`Non JSON from ${fullApi}: ${text.slice(0,150)}`); continue }
+          if (j?.url) {
+            log(`Success via ${fullApi}`)
+            return { url: j.url, title: j.filename || vid }
+          }
+          log(`No url from ${fullApi}: ${text.slice(0,300)}`)
+        } catch (e: any) {
+          log(`${base}${p} fail: ${e.message}`)
         }
-        log(`No url from ${api}: ${JSON.stringify(j)?.slice(0,200)}`)
-      } catch(e:any) {
-        log(`${api} fail: ${e.message}`)
       }
     }
     throw new Error('no audio url - all via worker failed')
@@ -75,33 +79,39 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', worker: WORKER })
+  if (path.includes('/api/ping')) {
+    return res.status(200).json({ ping: 'ok', worker: WORKER, ts: Date.now() })
+  }
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
     try {
-      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { 
-        headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) 
-      }).then(r=>r.text())
-      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m=>m[1])
-      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m=>m[1])
-      const uniq = [...new Set(ids)].slice(0,10)
-      return res.status(200).json(uniq.map((id,i)=>({ id, title: titles[i]||id, thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, uploader: '' })))
-    } catch { return res.status(200).json([]) }
+      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(5000)
+      }).then(r => r.text())
+      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m => m[1])
+      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m => m[1])
+      const uniq = [...new Set(ids)].slice(0, 10)
+      return res.status(200).json(uniq.map((vid, i) => ({ id: vid, title: titles[i] || vid, thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`, uploader: '' })))
+    } catch {
+      return res.status(200).json([])
+    }
   }
 
   if (path.includes('/api/extract')) {
     if (!id) return res.status(400).json({ error: 'id required', logs })
     let db = await getDb()
-    const found = db.find(x=>x.id===id)
+    const found = db.find(x => x.id === id)
     if (found) {
-      found.hits=(found.hits||0)+1; await saveDb(db)
+      found.hits = (found.hits || 0) + 1
+      await saveDb(db)
       return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title, logs })
     }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Downloading audio: ${aUrl.slice(0,80)}`)
-      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r=>r.arrayBuffer())
+      log(`Downloading audio: ${aUrl.slice(0, 80)}`)
+      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r => r.arrayBuffer())
       const fd = new FormData()
       fd.append('chat_id', CHAT)
       fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`)
@@ -112,7 +122,7 @@ export default async function handler(req: any, res: any) {
       db.push({ id, file_id: file_id2, title, hits: 1 })
       const newId = await saveDb(db)
       return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, newDbFileId: newId, title, logs })
-    } catch(e:any){
+    } catch (e: any) {
       log(`FINAL FAIL: ${e.message}`)
       return res.status(500).json({ error: `Extract fail: ${e.message}`, logs })
     }
