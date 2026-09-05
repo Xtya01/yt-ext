@@ -14,17 +14,12 @@ export default async function handler(req: any, res: any) {
     "https://api.allorigins.win/raw?url=",
     "https://corsproxy.io/?"
   ]
-
-  const BASES = [
-    "https://api.co.wuk.sh",
-    "https://wuk.sh",
-    "https://co.wuk.sh",
-    "https://cobalt-api.kittycat.boo",
-    "https://kittycat.boo",
-    "https://api.liubquanti.click",
-    "https://cobalt.liubquanti.click",
-    "https://cobalt.squair.xyz",
-    "https://api.squair.xyz"
+  const INVIDIOUS = [
+    "https://inv.tux.pizza",
+    "https://yewtu.be",
+    "https://invidious.snopyta.org",
+    "https://inv.nadeko.net",
+    "https://invidious.kavin.rocks"
   ]
 
   const tg = async (m: string, b?: any) => {
@@ -46,45 +41,35 @@ export default async function handler(req: any, res: any) {
       fd.append('chat_id', CHAT)
       fd.append('document', new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }), 'database.json')
       const r = await tg('sendDocument', fd)
-      if (r.ok) {
-        DB_FILE_ID = r.result.document.file_id
-        await tg('pinChatMessage', { chat_id: CHAT, message_id: r.result.message_id, disable_notification: true }).catch(()=>{})
-      }
+      if (r.ok) { DB_FILE_ID = r.result.document.file_id; await tg('pinChatMessage', { chat_id: CHAT, message_id: r.result.message_id, disable_notification: true }).catch(()=>{}) }
       return DB_FILE_ID
     } catch { return null }
   }
 
   const getAudioDirect = async (vid: string) => {
-    const ytUrl = `https://www.youtube.com/watch?v=${vid}`
     for (const proxy of PROXIES) {
-      for (const base of BASES) {
-        for (const ep of ["/api/json", ""]) {
-          const target = base + ep
-          const proxied = proxy + encodeURIComponent(target)
-          try {
-            log(`Trying ${proxy.includes('tgdot')?'worker':proxy.slice(8,20)} -> ${target}`)
-            const r = await fetch(proxied, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-              body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
-              signal: AbortSignal.timeout(15000)
-            })
-            const txt = await r.text()
-            let j: any = null
-            try { j = JSON.parse(txt) } catch { log(`Non JSON ${target}: ${txt.slice(0,120)}`); continue }
-            if (j?.url) { log(`SUCCESS via ${target}`); return { url: j.url, title: j.filename || vid } }
-            if (j?.error) log(`API error ${target}: ${j.error.code || j.error}`)
-          } catch (e: any) { log(`Fail ${target}: ${e.message}`) }
-        }
+      for (const inv of INVIDIOUS) {
+        try {
+          const apiUrl = `${inv}/api/v1/videos/${vid}`
+          const proxied = proxy + encodeURIComponent(apiUrl)
+          log(`Trying ${inv} via ${proxy.includes('tgdot')?'worker':proxy.slice(8,20)}`)
+          const r = await fetch(proxied, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) })
+          const txt = await r.text()
+          let j: any = null
+          try { j = JSON.parse(txt) } catch { log(`Non JSON ${inv}: ${txt.slice(0,100)}`); continue }
+          const audios = (j.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
+          if (audios[0]?.url) { log(`SUCCESS via ${inv}`); return { url: audios[0].url, title: j.title || vid } }
+          log(`No audio in ${inv}`)
+        } catch(e:any){ log(`Fail ${inv}: ${e.message}`) }
       }
     }
-    throw new Error('no audio url - all proxies failed')
+    throw new Error('no audio url - invidious failed')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', proxies: PROXIES.length, bases: BASES.length })
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'invidious+worker' })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
