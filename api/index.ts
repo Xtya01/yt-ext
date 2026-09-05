@@ -8,19 +8,7 @@ export default async function handler(req: any, res: any) {
   const BOT = process.env.BOT_TOKEN || ''
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
-
   const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
-  const PROXIES = [WORKER, "https://api.allorigins.win/raw?url=", "https://corsproxy.io/?"]
-
-  // Tera wala naya instance + purane backup
-  const COBALT_URLS = [
-    "https://api.zarz.moe/v1/dl/cobalt",
-    "https://api.zarz.moe",
-    "https://api.co.wuk.sh",
-    "https://wuk.sh/api/json",
-    "https://cobalt-api.kittycat.boo"
-  ]
-  const INVIDIOUS = ["https://inv.tux.pizza", "https://yewtu.be", "https://invidious.snopyta.org"]
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
@@ -48,40 +36,32 @@ export default async function handler(req: any, res: any) {
 
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
-    // 1. Tera wala zarz.moe wala cobalt pehle try karo
-    for (const proxy of PROXIES) {
-      for (const api of COBALT_URLS) {
+    const payload = { url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic', audioBitrate: '128' }
+    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+
+    // 1. DIRECT zarz.moe - bina worker ke (ye naya hai, Vercel se khul sakta hai)
+    const directTargets = ["https://api.zarz.moe/v1/dl/cobalt", "https://api.zarz.moe", "https://co.wuk.sh/api/json"]
+    for (const api of directTargets) {
+      try {
+        log(`Trying DIRECT -> ${api}`)
+        const r = await fetch(api, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(12000) })
+        const j: any = await r.json().catch(async()=>{ const t=await r.text(); log(`Non JSON ${api}: ${t.slice(0,120)}`); return null })
+        if (j?.url || j?.data?.url) { log(`SUCCESS DIRECT ${api}`); return { url: j.url || j.data.url, title: j.filename || vid } }
+        log(`No url from ${api}: ${JSON.stringify(j)?.slice(0,200)}`)
+      } catch(e:any){ log(`DIRECT fail ${api}: ${e.message}`) }
+    }
+
+    // 2. Via Worker + proxies
+    const proxies = [WORKER, "https://api.allorigins.win/raw?url="]
+    for (const proxy of proxies) {
+      for (const api of directTargets) {
         try {
           const proxied = proxy + encodeURIComponent(api)
-          log(`Trying COBALT ${api} via ${proxy.includes('tgdot')?'worker':'proxy'}`)
-          const r = await fetch(proxied, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
-            signal: AbortSignal.timeout(15000)
-          })
-          const txt = await r.text()
-          let j: any = null
-          try { j = JSON.parse(txt) } catch { log(`Non JSON ${api}: ${txt.slice(0,120)}`); continue }
-          // zarz.moe kabhi kabhi {data:{url}} deta hai
-          const audioUrl = j.url || j.data?.url || j.result?.url
-          if (audioUrl) { log(`SUCCESS via ${api}`); return { url: audioUrl, title: j.filename || j.title || vid } }
-          log(`No url from ${api}: ${txt.slice(0,200)}`)
-        } catch(e:any){ log(`Fail ${api}: ${e.message}`) }
-      }
-    }
-    // 2. Agar cobalt fail to invidious fallback
-    for (const proxy of PROXIES) {
-      for (const inv of INVIDIOUS) {
-        try {
-          const apiUrl = `${inv}/api/v1/videos/${vid}`
-          const proxied = proxy + encodeURIComponent(apiUrl)
-          log(`Trying INV ${inv}`)
-          const r = await fetch(proxied, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) })
-          const j = await r.json().catch(()=>null)
-          const audios = (j?.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
-          if (audios[0]?.url) return { url: audios[0].url, title: j.title || vid }
-        } catch {}
+          log(`Trying via ${proxy.includes('tgdot')?'worker':'proxy'} -> ${api}`)
+          const r = await fetch(proxied, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) })
+          const j: any = await r.json().catch(()=>null)
+          if (j?.url || j?.data?.url) { log(`SUCCESS via proxy ${api}`); return { url: j.url || j.data.url, title: j.filename || vid } }
+        } catch(e:any){ log(`Proxy fail ${api}: ${e.message}`) }
       }
     }
     throw new Error('no audio url')
@@ -90,7 +70,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', cobalt: "https://api.zarz.moe/v1/dl/cobalt", worker: WORKER })
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', cobalt: 'https://api.zarz.moe/v1/dl/cobalt', worker: WORKER })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
@@ -111,9 +91,10 @@ export default async function handler(req: any, res: any) {
       const { url: aUrl, title } = await getAudioDirect(id)
       log(`Downloading ${aUrl.slice(0,80)}`)
       const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r=>r.arrayBuffer())
+      if (!BOT ||!CHAT) { log('No BOT/CHAT env, returning direct url'); return res.status(200).json({ status: 'direct_no_tg', direct_url: aUrl, title, logs }) }
       const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`); fd.append('title', title)
       const tr = await tg('sendAudio', fd)
-      if (!tr.ok) return res.status(500).json({ error: 'tg upload fail', raw: tr, logs })
+      if (!tr.ok) { log(`TG fail, returning direct`); return res.status(200).json({ status: 'direct_tg_fail', direct_url: aUrl, tg_error: tr, logs }) }
       const file_id2 = tr.result.audio?.file_id
       db.push({ id, file_id: file_id2, title, hits: 1 })
       const newId = await saveDb(db)
