@@ -8,14 +8,30 @@ export default async function handler(req: any, res: any) {
   const BOT = process.env.BOT_TOKEN || ''
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
-  const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
+
+  const PROXIES = [
+    "https://yt-proxy.tgdot.workers.dev/?url=",
+    "https://api.allorigins.win/raw?url=",
+    "https://corsproxy.io/?"
+  ]
+
+  const BASES = [
+    "https://api.co.wuk.sh",
+    "https://wuk.sh",
+    "https://co.wuk.sh",
+    "https://cobalt-api.kittycat.boo",
+    "https://kittycat.boo",
+    "https://api.liubquanti.click",
+    "https://cobalt.liubquanti.click",
+    "https://cobalt.squair.xyz",
+    "https://api.squair.xyz"
+  ]
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
     if (b instanceof FormData) return await fetch(u, { method: 'POST', body: b }).then(r => r.json())
     return await fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then(r => r.json())
   }
-
   const getDb = async (): Promise<any[]> => {
     try {
       if (!DB_FILE_ID) return []
@@ -24,7 +40,6 @@ export default async function handler(req: any, res: any) {
       return await fetch(`https://api.telegram.org/file/bot${BOT}/${f.result.file_path}`).then(r => r.json()).catch(() => [])
     } catch { return [] }
   }
-
   const saveDb = async (db: any[]) => {
     try {
       const fd = new FormData()
@@ -41,92 +56,63 @@ export default async function handler(req: any, res: any) {
 
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
-    const bases = [
-      "https://api.ayaka.one",
-      "https://co.wuk.sh",
-      "https://cobalt.canine.tools",
-      "https://api.cobalt.squair.xyz",
-      "https://api.cobalt.sqir.xyz"
-    ]
-    for (const base of bases) {
-      for (const p of ["/api/json", ""]) {
-        try {
-          const fullApi = base + p
-          const proxied = WORKER + encodeURIComponent(fullApi)
-          log(`Trying via worker -> ${fullApi}`)
-          const r = await fetch(proxied, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
-            signal: AbortSignal.timeout(12000)
-          })
-          const text = await r.text()
-          let j: any = null
-          try { j = JSON.parse(text) } catch { log(`Non JSON from ${fullApi}: ${text.slice(0,150)}`); continue }
-          if (j?.url) {
-            log(`Success via ${fullApi}`)
-            return { url: j.url, title: j.filename || vid }
-          }
-          log(`No url from ${fullApi}: ${text.slice(0,300)}`)
-        } catch (e: any) {
-          log(`${base}${p} fail: ${e.message}`)
+    for (const proxy of PROXIES) {
+      for (const base of BASES) {
+        for (const ep of ["/api/json", ""]) {
+          const target = base + ep
+          const proxied = proxy + encodeURIComponent(target)
+          try {
+            log(`Trying ${proxy.includes('tgdot')?'worker':proxy.slice(8,20)} -> ${target}`)
+            const r = await fetch(proxied, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
+              signal: AbortSignal.timeout(15000)
+            })
+            const txt = await r.text()
+            let j: any = null
+            try { j = JSON.parse(txt) } catch { log(`Non JSON ${target}: ${txt.slice(0,120)}`); continue }
+            if (j?.url) { log(`SUCCESS via ${target}`); return { url: j.url, title: j.filename || vid } }
+            if (j?.error) log(`API error ${target}: ${j.error.code || j.error}`)
+          } catch (e: any) { log(`Fail ${target}: ${e.message}`) }
         }
       }
     }
-    throw new Error('no audio url - all via worker failed')
+    throw new Error('no audio url - all proxies failed')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) {
-    return res.status(200).json({ ping: 'ok', worker: WORKER, ts: Date.now() })
-  }
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', proxies: PROXIES.length, bases: BASES.length })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
     try {
-      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(5000)
-      }).then(r => r.text())
-      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m => m[1])
-      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m => m[1])
-      const uniq = [...new Set(ids)].slice(0, 10)
-      return res.status(200).json(uniq.map((vid, i) => ({ id: vid, title: titles[i] || vid, thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`, uploader: '' })))
-    } catch {
-      return res.status(200).json([])
-    }
+      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) }).then(r=>r.text())
+      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m=>m[1])
+      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m=>m[1])
+      return res.status(200).json([...new Set(ids)].slice(0,10).map((vid,i)=>({ id: vid, title: titles[i]||vid, thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`, uploader: '' })))
+    } catch { return res.status(200).json([]) }
   }
 
   if (path.includes('/api/extract')) {
     if (!id) return res.status(400).json({ error: 'id required', logs })
     let db = await getDb()
-    const found = db.find(x => x.id === id)
-    if (found) {
-      found.hits = (found.hits || 0) + 1
-      await saveDb(db)
-      return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title, logs })
-    }
+    const found = db.find(x=>x.id===id)
+    if (found) { found.hits=(found.hits||0)+1; await saveDb(db); return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title, logs }) }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Downloading audio: ${aUrl.slice(0, 80)}`)
-      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r => r.arrayBuffer())
-      const fd = new FormData()
-      fd.append('chat_id', CHAT)
-      fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`)
-      fd.append('title', title)
+      log(`Downloading ${aUrl.slice(0,80)}`)
+      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r=>r.arrayBuffer())
+      const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`); fd.append('title', title)
       const tr = await tg('sendAudio', fd)
       if (!tr.ok) return res.status(500).json({ error: 'tg upload fail', raw: tr, logs })
       const file_id2 = tr.result.audio?.file_id
       db.push({ id, file_id: file_id2, title, hits: 1 })
       const newId = await saveDb(db)
       return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, newDbFileId: newId, title, logs })
-    } catch (e: any) {
-      log(`FINAL FAIL: ${e.message}`)
-      return res.status(500).json({ error: `Extract fail: ${e.message}`, logs })
-    }
+    } catch(e:any){ log(`FINAL FAIL: ${e.message}`); return res.status(500).json({ error: `Extract fail: ${e.message}`, logs }) }
   }
-
   return res.status(200).json({ ok: true })
 }
