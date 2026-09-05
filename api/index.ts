@@ -29,40 +29,32 @@ export default async function handler(req: any, res: any) {
       fd.append('chat_id', CHAT)
       fd.append('document', new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }), 'database.json')
       const r = await tg('sendDocument', fd)
-      if (r.ok) { DB_FILE_ID = r.result.document.file_id; await tg('pinChatMessage', { chat_id: CHAT, message_id: r.result.message_id, disable_notification: true }).catch(()=>{}) }
+      if (r.ok) { DB_FILE_ID = r.result.document.file_id }
       return DB_FILE_ID
     } catch { return null }
   }
 
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
-    const payload = { url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic', audioBitrate: '128' }
-    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+    const payload = { url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }
+    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' }
 
-    // 1. DIRECT zarz.moe - bina worker ke (ye naya hai, Vercel se khul sakta hai)
-    const directTargets = ["https://api.zarz.moe/v1/dl/cobalt", "https://api.zarz.moe", "https://co.wuk.sh/api/json"]
-    for (const api of directTargets) {
+    // Sirf 2 try - fast
+    const tries = [
+      { url: "https://api.zarz.moe/v1/dl/cobalt", via: "direct" },
+      { url: WORKER + encodeURIComponent("https://api.zarz.moe/v1/dl/cobalt"), via: "worker" }
+    ]
+    for (const t of tries) {
       try {
-        log(`Trying DIRECT -> ${api}`)
-        const r = await fetch(api, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(12000) })
-        const j: any = await r.json().catch(async()=>{ const t=await r.text(); log(`Non JSON ${api}: ${t.slice(0,120)}`); return null })
-        if (j?.url || j?.data?.url) { log(`SUCCESS DIRECT ${api}`); return { url: j.url || j.data.url, title: j.filename || vid } }
-        log(`No url from ${api}: ${JSON.stringify(j)?.slice(0,200)}`)
-      } catch(e:any){ log(`DIRECT fail ${api}: ${e.message}`) }
-    }
-
-    // 2. Via Worker + proxies
-    const proxies = [WORKER, "https://api.allorigins.win/raw?url="]
-    for (const proxy of proxies) {
-      for (const api of directTargets) {
-        try {
-          const proxied = proxy + encodeURIComponent(api)
-          log(`Trying via ${proxy.includes('tgdot')?'worker':'proxy'} -> ${api}`)
-          const r = await fetch(proxied, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(15000) })
-          const j: any = await r.json().catch(()=>null)
-          if (j?.url || j?.data?.url) { log(`SUCCESS via proxy ${api}`); return { url: j.url || j.data.url, title: j.filename || vid } }
-        } catch(e:any){ log(`Proxy fail ${api}: ${e.message}`) }
-      }
+        log(`Trying ${t.via} -> ${t.url.slice(0,40)}`)
+        const r = await fetch(t.url, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(8000) })
+        const txt = await r.text()
+        log(`Response ${t.via}: ${txt.slice(0,200)}`)
+        let j: any = null
+        try { j = JSON.parse(txt) } catch { continue }
+        const audioUrl = j.url || j.data?.url || j.result?.url
+        if (audioUrl) return { url: audioUrl, title: j.filename || vid }
+      } catch(e:any){ log(`${t.via} fail: ${e.message}`) }
     }
     throw new Error('no audio url')
   }
@@ -70,36 +62,43 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', cobalt: 'https://api.zarz.moe/v1/dl/cobalt', worker: WORKER })
+  try {
+    if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', time: Date.now() })
 
-  if (path.includes('/api/search')) {
-    if (!q) return res.status(200).json([])
-    try {
-      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) }).then(r=>r.text())
+    if (path.includes('/api/search')) {
+      if (!q) return res.status(200).json([])
+      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(4000) }).then(r=>r.text()).catch(()=> '')
       const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m=>m[1])
-      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m=>m[1])
-      return res.status(200).json([...new Set(ids)].slice(0,10).map((vid,i)=>({ id: vid, title: titles[i]||vid, thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`, uploader: '' })))
-    } catch { return res.status(200).json([]) }
-  }
+      return res.status(200).json([...new Set(ids)].slice(0,8).map(vid=>({ id: vid, title: vid, thumbnail: `https://i.ytimg.com/vi/${vid}/hqdefault.jpg` })))
+    }
 
-  if (path.includes('/api/extract')) {
-    if (!id) return res.status(400).json({ error: 'id required', logs })
-    let db = await getDb()
-    const found = db.find(x=>x.id===id)
-    if (found) { found.hits=(found.hits||0)+1; await saveDb(db); return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title, logs }) }
-    try {
+    if (path.includes('/api/extract')) {
+      if (!id) return res.status(400).json({ error: 'id required', logs })
+      let db = await getDb()
+      const found = db.find(x=>x.id===id)
+      if (found) return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, logs })
+
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Downloading ${aUrl.slice(0,80)}`)
-      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(25000) }).then(r=>r.arrayBuffer())
-      if (!BOT ||!CHAT) { log('No BOT/CHAT env, returning direct url'); return res.status(200).json({ status: 'direct_no_tg', direct_url: aUrl, title, logs }) }
-      const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`); fd.append('title', title)
+      log(`Got audio url: ${aUrl.slice(0,80)}`)
+
+      // Agar BOT nahi hai to direct url hi de de taaki pata chale kaam kar raha hai
+      if (!BOT || !CHAT) return res.status(200).json({ status: 'direct', direct_url: aUrl, title, logs })
+
+      const buf = await fetch(aUrl, { signal: AbortSignal.timeout(15000) }).then(r=>r.arrayBuffer()).catch(()=>null)
+      if (!buf) return res.status(200).json({ status: 'direct_no_dl', direct_url: aUrl, logs })
+
+      const fd = new FormData(); fd.append('chat_id', CHAT); fd.append('audio', new Blob([buf], { type: 'audio/mpeg' }), `${id}.mp3`)
       const tr = await tg('sendAudio', fd)
-      if (!tr.ok) { log(`TG fail, returning direct`); return res.status(200).json({ status: 'direct_tg_fail', direct_url: aUrl, tg_error: tr, logs }) }
+      if (!tr.ok) return res.status(200).json({ status: 'direct_tg_fail', direct_url: aUrl, tg_error: tr, logs })
+
       const file_id2 = tr.result.audio?.file_id
       db.push({ id, file_id: file_id2, title, hits: 1 })
-      const newId = await saveDb(db)
-      return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, newDbFileId: newId, title, logs })
-    } catch(e:any){ log(`FINAL FAIL: ${e.message}`); return res.status(500).json({ error: `Extract fail: ${e.message}`, logs }) }
+      await saveDb(db)
+      return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, title, logs })
+    }
+
+    return res.status(200).json({ ok: true })
+  } catch(e:any){
+    return res.status(500).json({ error: e.message, logs })
   }
-  return res.status(200).json({ ok: true })
 }
