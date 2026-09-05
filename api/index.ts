@@ -1,7 +1,6 @@
 export default async function handler(req: any, res: any) {
   const logs: string[] = []
   const log = (m: string) => { logs.push(m); console.log(m) }
-
   const url = new URL(req.url, `https://${req.headers.host}`)
   const path = url.pathname
   const q = url.searchParams.get('q')?.trim()
@@ -40,57 +39,60 @@ export default async function handler(req: any, res: any) {
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
 
-    // Community instances jo JWT nahi mangte - ye list cobalt.directory se hai
-    const cobaltInstances = [
-      'https://api.ayaka.one',
-      'https://co.ayaka.one',
-      'https://cobalt.canine.tools',
-      'https://api.cobalt.squair.xyz',
-      'https://cobalt-api.kwiatekmiki.com'
-    ]
+    // 1) loader.to / convert2mp3s - sabse stable
+    try {
+      log('Trying loader.to')
+      const r = await fetch(`https://convert2mp3s.com/api/single/mp3?url=${encodeURIComponent(ytUrl)}`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(8000) })
+      const html = await r.text()
+      const m = html.match(/href="([^"]+\.mp3[^"]*)"/) || html.match(/"url":"([^"]+\.mp3[^"]*)"/)
+      if (m) { log('loader.to success'); return { url: m[1].replace(/\\/g,''), title: vid } }
+    } catch(e:any){ log(`loader.to fail ${e.message}`) }
 
-    for (const api of cobaltInstances) {
-      try {
-        log(`Trying Cobalt v10 ${api}`)
-        const r = await fetch(api, {
+    // 2) 10downloader.com
+    try {
+      log('Trying 10downloader.com')
+      const r = await fetch(`https://10downloader.com/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0' },
+        body: `url=${encodeURIComponent(ytUrl)}`,
+        signal: AbortSignal.timeout(8000)
+      })
+      const html = await r.text()
+      const m = html.match(/href="([^"]*\.mp3[^"]*)"/i) || html.match(/downloadUrl":"([^"]+)"/)
+      if (m) { log('10downloader success'); return { url: m[1], title: vid } }
+    } catch(e:any){ log(`10downloader fail ${e.message}`) }
+
+    // 3) y2mate.is / yt1s.com
+    try {
+      log('Trying y2mate.is')
+      const r = await fetch(`https://www.y2mate.is/api/ajaxSearch/index`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0' },
+        body: `q=${encodeURIComponent(ytUrl)}&vt=home`,
+        signal: AbortSignal.timeout(8000)
+      })
+      const j = await r.json()
+      if (j.vid) {
+        const r2 = await fetch(`https://www.y2mate.is/api/mConvert`, {
           method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0'
-          },
-          body: JSON.stringify({
-            url: ytUrl,
-            downloadMode: 'audio',
-            audioFormat: 'mp3',
-            audioBitrate: '128',
-            filenameStyle: 'basic'
-          }),
-          signal: AbortSignal.timeout(10000)
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `vid=${j.vid}&k=mp3`,
+          signal: AbortSignal.timeout(8000)
         })
-        const txt = await r.text()
-        log(`${api} status ${r.status}: ${txt.slice(0,300)}`)
-        if (txt.trim().startsWith('<')) continue
-        const j = JSON.parse(txt)
-        if (j.url) {
-          log(`Success ${api}`)
-          return { url: j.url, title: vid }
-        }
-      } catch(e:any){
-        log(`Fail ${api}: ${e.message}`)
+        const j2 = await r2.json()
+        if (j2.dlink) { log('y2mate success'); return { url: j2.dlink, title: j.title || vid } }
       }
-    }
+    } catch(e:any){ log(`y2mate fail ${e.message}`) }
 
-    // Fallback Piped
-    for (const base of ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee']) {
-      try {
-        log(`Trying Piped ${base}`)
-        const j = await fetch(`${base}/streams/${vid}`, { signal: AbortSignal.timeout(6000) }).then(r=>r.json())
-        if (j.audioStreams?.[0]?.url) return { url: j.audioStreams[0].url, title: j.title || vid }
-      } catch(e:any){ log(`Piped ${base} err: ${e.message}`) }
-    }
+    // 4) savefrom.net
+    try {
+      log('Trying savefrom.net')
+      const r = await fetch(`https://worker.sf-tools.com/savefrom.php?url=${encodeURIComponent(ytUrl)}`, { signal: AbortSignal.timeout(8000) })
+      const j = await r.json()
+      if (j.url?.[0]?.url) { log('savefrom success'); return { url: j.url[0].url, title: vid } }
+    } catch(e:any){ log(`savefrom fail ${e.message}`) }
 
-    throw new Error('no audio url - all community instances failed, host own cobalt')
+    throw new Error('no audio url - all 5 YouTube sites failed')
   }
 
   res.setHeader('Content-Type', 'application/json')
@@ -119,6 +121,7 @@ export default async function handler(req: any, res: any) {
     }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
+      log(`Downloading ${aUrl.slice(0,60)}`)
       const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer())
       const fd = new FormData()
       fd.append('chat_id', CHAT)
