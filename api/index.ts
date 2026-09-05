@@ -14,7 +14,7 @@ export default async function handler(req: any, res: any) {
   }
   const getDb = async (): Promise<any[]> => {
     try {
-      if (!DB_FILE_ID ||!BOT ||!CHAT) return []
+      if (!DB_FILE_ID) return []
       const f = await fetch(`https://api.telegram.org/bot${BOT}/getFile?file_id=${DB_FILE_ID}`).then(r => r.json())
       if (!f.ok) return []
       return await fetch(`https://api.telegram.org/file/bot${BOT}/${f.result.file_path}`).then(r => r.json()).catch(() => [])
@@ -28,60 +28,63 @@ export default async function handler(req: any, res: any) {
       const r = await tg('sendDocument', fd)
       if (r.ok) {
         DB_FILE_ID = r.result.document.file_id
-        await tg('pinChatMessage', { chat_id: CHAT, message_id: r.result.message_id, disable_notification: true }).catch(() => {})
+        await tg('pinChatMessage', { chat_id: CHAT, message_id: r.result.message_id, disable_notification: true }).catch(()=>{})
       }
       return DB_FILE_ID
     } catch { return null }
   }
 
-  // NEW: Cobalt + Innertube mix - works from Vercel
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
+    let lastErr = ''
 
-    // 1. Cobalt API - most reliable on Vercel
-    const cobaltApis = [
-      'https://api.cobalt.tools/api/json',
-      'https://co.wuk.sh/api/json',
-      'https://api.zarz.moe/v1/dl/cobalt'
-    ]
-    for (const api of cobaltApis) {
+    // 1) Cobalt - full payload
+    for (const api of ['https://api.cobalt.tools/api/json','https://co.wuk.sh/api/json']) {
       try {
         const r = await fetch(api, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ url: ytUrl, isAudioOnly: true, aFormat: 'mp3' }),
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({ url: ytUrl, vCodec: 'h264', vQuality: '720', aFormat: 'mp3', isAudioOnly: true, filenamePattern: 'basic' }),
           signal: AbortSignal.timeout(8000)
         })
-        const j: any = await r.json()
+        const j:any = await r.json()
         if (j.url) return { url: j.url, title: vid }
-        if (j.status === 'redirect' && j.url) return { url: j.url, title: vid }
-      } catch {}
+      } catch(e:any){ lastErr = e.message }
     }
 
-    // 2. Innertube IOS (if cobalt down)
+    // 2) yt1s.com - Vercel pe sabse zyada chalta hai
     try {
-      const key = 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w'
-      const r = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${key}`, {
+      const s1 = await fetch('https://yt1s.com/api/ajaxSearch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ context: { client: { clientName: 'IOS', clientVersion: '20.10.38', deviceModel: 'iPhone16,2', osName: 'iOS', osVersion: '17.5.1.21F90', hl: 'en', gl: 'US' } }, videoId: vid }),
-        signal: AbortSignal.timeout(6000)
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://yt1s.com', 'Referer': 'https://yt1s.com/' },
+        body: `q=${encodeURIComponent(ytUrl)}&vt=mp3`,
+        signal: AbortSignal.timeout(8000)
       })
-      const j: any = await r.json()
-      const audio = (j.streamingData?.adaptiveFormats || []).filter((f: any) => f.mimeType?.includes('audio/')).sort((a: any, b: any) => b.bitrate - a.bitrate)[0]
-      if (audio?.url) return { url: audio.url, title: j.videoDetails?.title || vid }
-    } catch {}
+      const j1:any = await s1.json()
+      const mp3Keys = j1.links?.mp3? Object.keys(j1.links.mp3) : []
+      if (mp3Keys.length) {
+        const k = j1.links.mp3[mp3Keys[0]].k
+        const s2 = await fetch('https://yt1s.com/api/ajaxConvert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://yt1s.com', 'Referer': 'https://yt1s.com/' },
+          body: `vid=${j1.vid}&k=${k}`,
+          signal: AbortSignal.timeout(8000)
+        })
+        const j2:any = await s2.json()
+        if (j2.dlink) return { url: j2.dlink, title: j1.title || vid }
+      }
+    } catch(e:any){ lastErr = e.message }
 
-    // 3. Invidious
-    for (const base of ['https://yewtu.be', 'https://inv.tux.pizza']) {
+    // 3) Piped fallback
+    for (const base of ['https://pipedapi.syncpundit.io','https://api.piped.private.coffee']) {
       try {
-        const r = await fetch(`${base}/api/v1/videos/${vid}`, { signal: AbortSignal.timeout(5000) })
-        const j: any = await r.json()
-        const audio = (j.adaptiveFormats || []).filter((f: any) => f.type?.startsWith('audio/'))[0]
-        if (audio?.url) return { url: audio.url, title: j.title || vid }
-      } catch {}
+        const r:any = await fetch(`${base}/streams/${vid}`, { signal: AbortSignal.timeout(6000) }).then(r=>r.json())
+        const a = r.audioStreams?.[0]
+        if (a?.url) return { url: a.url, title: r.title || vid }
+      } catch(e:any){ lastErr = e.message }
     }
-    throw new Error('no audio url')
+
+    throw new Error('no audio url - last: '+lastErr)
   }
 
   res.setHeader('Content-Type', 'application/json')
@@ -92,28 +95,22 @@ export default async function handler(req: any, res: any) {
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
     try {
-      const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`
-      const html = await fetch(ytUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(4000) }).then(r => r.text())
-      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m => m[1])
-      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m => m[1])
-      const uniq = [...new Set(ids)].slice(0, 10)
-      const out = uniq.map((id, i) => ({ id, title: titles[i] || id, thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, uploader: '' }))
-      return res.status(200).json(out)
+      const html = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(4000) }).then(r=>r.text())
+      const ids = [...html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)].map(m=>m[1])
+      const titles = [...html.matchAll(/"title":\{"runs":\[\{"text":"([^"]{3,120})"/g)].map(m=>m[1])
+      const uniq = [...new Set(ids)].slice(0,10)
+      return res.status(200).json(uniq.map((id,i)=>({ id, title: titles[i]||id, thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, uploader: '' })))
     } catch { return res.status(200).json([]) }
   }
 
   if (path.includes('/api/extract')) {
     if (!id) return res.status(400).json({ error: 'id required' })
     let db = await getDb()
-    const found = db.find(x => x.id === id)
-    if (found) {
-      found.hits = (found.hits || 0) + 1
-      await saveDb(db)
-      return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title })
-    }
+    const found = db.find(x=>x.id===id)
+    if (found) { found.hits=(found.hits||0)+1; await saveDb(db); return res.status(200).json({ status: 'cache', telegram_file_id: found.file_id, title: found.title }) }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
-      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }).then(r => r.arrayBuffer())
+      const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer())
       const fd = new FormData()
       fd.append('chat_id', CHAT)
       fd.append('audio', new Blob([buf], { type: 'audio/mp4' }), `${id}.m4a`)
@@ -124,9 +121,7 @@ export default async function handler(req: any, res: any) {
       db.push({ id, file_id: file_id2, title, hits: 1 })
       const newId = await saveDb(db)
       return res.status(200).json({ status: 'fresh', telegram_file_id: file_id2, newDbFileId: newId, title })
-    } catch (e: any) {
-      return res.status(500).json({ error: 'Extract fail: ' + e.message })
-    }
+    } catch(e:any){ return res.status(500).json({ error: 'Extract fail: '+e.message }) }
   }
 
   return res.status(200).json({ ok: true })
