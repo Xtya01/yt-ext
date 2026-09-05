@@ -37,70 +37,57 @@ export default async function handler(req: any, res: any) {
     } catch { return null }
   }
 
+  // FINAL FIX: Cobalt v10 root endpoint
   const getAudioDirect = async (vid: string) => {
     const ytUrl = `https://www.youtube.com/watch?v=${vid}`
 
-    // 1) Try via AllOrigins proxy -> Piped (bypass Cloudflare)
-    for (const base of ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee', 'https://pipedapi.syncpundit.io']) {
+    // 1) NEW Cobalt v10 - POST to root /
+    for (const api of ['https://api.cobalt.tools', 'https://co.wuk.sh']) {
       try {
-        const target = `${base}/streams/${vid}`
-        const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
-        log(`Trying AllOrigins Piped: ${base}`)
-        const r = await fetch(proxy, { signal: AbortSignal.timeout(8000) })
+        log(`Trying Cobalt v10 ${api}`)
+        const r = await fetch(api, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
+          },
+          body: JSON.stringify({
+            url: ytUrl,
+            downloadMode: 'audio',
+            audioFormat: 'mp3',
+            audioBitrate: '128',
+            filenameStyle: 'basic'
+          }),
+          signal: AbortSignal.timeout(10000)
+        })
         const txt = await r.text()
         if (txt.trim().startsWith('<!DOCTYPE') || txt.trim().startsWith('<html')) {
-          log(`${base} via proxy returned HTML`)
+          log(`Cobalt ${api} returned HTML`)
           continue
         }
         const j = JSON.parse(txt)
-        const a = j.audioStreams?.[0]
-        if (a?.url) { log(`Success Piped ${base}`); return { url: a.url, title: j.title || vid } }
-        log(`${base} no audioStreams`)
+        if (j.url) {
+          log(`Cobalt v10 success ${api}`)
+          return { url: j.url, title: vid }
+        }
+        log(`Cobalt ${api} no url: ${txt.slice(0,200)}`)
+      } catch(e:any){
+        log(`Cobalt ${api} err: ${e.message}`)
+      }
+    }
+
+    // 2) Piped fallback
+    for (const base of ['https://pipedapi.kavin.rocks', 'https://pipedapi.syncpundit.io', 'https://api.piped.private.coffee']) {
+      try {
+        log(`Trying Piped ${base}`)
+        const j = await fetch(`${base}/streams/${vid}`, { signal: AbortSignal.timeout(6000) }).then(r=>r.json())
+        if (j.audioStreams?.[0]?.url) {
+          log(`Piped success ${base}`)
+          return { url: j.audioStreams[0].url, title: j.title || vid }
+        }
       } catch(e:any){ log(`Piped ${base} err: ${e.message}`) }
     }
-
-    // 2) Try Cobalt direct
-    for (const api of ['https://api.cobalt.tools/api/json','https://co.wuk.sh/api/json']) {
-      try {
-        log(`Trying Cobalt ${api}`)
-        const r = await fetch(api, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-          body: JSON.stringify({ url: ytUrl, vCodec: 'h264', vQuality: '720', aFormat: 'mp3', isAudioOnly: true }),
-          signal: AbortSignal.timeout(8000)
-        })
-        const txt = await r.text()
-        if (txt.trim().startsWith('<')) { log(`Cobalt ${api} HTML`); continue }
-        const j = JSON.parse(txt)
-        if (j.url) { log(`Success Cobalt ${api}`); return { url: j.url, title: vid } }
-        log(`Cobalt ${api} no url: ${txt.slice(0,200)}`)
-      } catch(e:any){ log(`Cobalt err ${e.message}`) }
-    }
-
-    // 3) Try yt1s
-    try {
-      log('Trying yt1s')
-      const s1 = await fetch('https://yt1s.com/api/ajaxSearch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://yt1s.com' },
-        body: `q=${encodeURIComponent(ytUrl)}&vt=mp3`,
-        signal: AbortSignal.timeout(8000)
-      })
-      const t1 = await s1.text()
-      if (t1.trim().startsWith('<')) { log('yt1s search HTML'); throw new Error('yt1s html') }
-      const j1 = JSON.parse(t1)
-      const k = j1.links?.mp3? Object.values(j1.links.mp3)[0] as any : null
-      if (!k?.k) throw new Error('yt1s no k')
-      const s2 = await fetch('https://yt1s.com/api/ajaxConvert', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0' },
-        body: `vid=${j1.vid}&k=${k.k}`,
-        signal: AbortSignal.timeout(8000)
-      })
-      const j2 = JSON.parse(await s2.text())
-      if (j2.dlink) { log('Success yt1s'); return { url: j2.dlink, title: j1.title } }
-      log('yt1s no dlink')
-    } catch(e:any){ log(`yt1s err ${e.message}`) }
 
     throw new Error('no audio url')
   }
@@ -108,7 +95,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok' })
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', logs })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
@@ -131,9 +118,9 @@ export default async function handler(req: any, res: any) {
     }
     try {
       const { url: aUrl, title } = await getAudioDirect(id)
-      log(`Downloading audio: ${aUrl.slice(0,80)}...`)
+      log(`Downloading ${aUrl.slice(0,60)}...`)
       const buf = await fetch(aUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(20000) }).then(r=>r.arrayBuffer())
-      log(`Audio size: ${buf.byteLength}`)
+      log(`Size ${buf.byteLength}`)
       const fd = new FormData()
       fd.append('chat_id', CHAT)
       fd.append('audio', new Blob([buf], { type: 'audio/mp4' }), `${id}.m4a`)
