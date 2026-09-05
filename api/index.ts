@@ -9,18 +9,18 @@ export default async function handler(req: any, res: any) {
   const CHAT = process.env.CHANNEL_ID || ''
   let DB_FILE_ID = process.env.DB_FILE_ID || ''
 
-  const PROXIES = [
-    "https://yt-proxy.tgdot.workers.dev/?url=",
-    "https://api.allorigins.win/raw?url=",
-    "https://corsproxy.io/?"
+  const WORKER = "https://yt-proxy.tgdot.workers.dev/?url="
+  const PROXIES = [WORKER, "https://api.allorigins.win/raw?url=", "https://corsproxy.io/?"]
+
+  // Tera wala naya instance + purane backup
+  const COBALT_URLS = [
+    "https://api.zarz.moe/v1/dl/cobalt",
+    "https://api.zarz.moe",
+    "https://api.co.wuk.sh",
+    "https://wuk.sh/api/json",
+    "https://cobalt-api.kittycat.boo"
   ]
-  const INVIDIOUS = [
-    "https://inv.tux.pizza",
-    "https://yewtu.be",
-    "https://invidious.snopyta.org",
-    "https://inv.nadeko.net",
-    "https://invidious.kavin.rocks"
-  ]
+  const INVIDIOUS = ["https://inv.tux.pizza", "https://yewtu.be", "https://invidious.snopyta.org"]
 
   const tg = async (m: string, b?: any) => {
     const u = `https://api.telegram.org/bot${BOT}/${m}`
@@ -47,29 +47,50 @@ export default async function handler(req: any, res: any) {
   }
 
   const getAudioDirect = async (vid: string) => {
+    const ytUrl = `https://www.youtube.com/watch?v=${vid}`
+    // 1. Tera wala zarz.moe wala cobalt pehle try karo
+    for (const proxy of PROXIES) {
+      for (const api of COBALT_URLS) {
+        try {
+          const proxied = proxy + encodeURIComponent(api)
+          log(`Trying COBALT ${api} via ${proxy.includes('tgdot')?'worker':'proxy'}`)
+          const r = await fetch(proxied, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', filenameStyle: 'basic' }),
+            signal: AbortSignal.timeout(15000)
+          })
+          const txt = await r.text()
+          let j: any = null
+          try { j = JSON.parse(txt) } catch { log(`Non JSON ${api}: ${txt.slice(0,120)}`); continue }
+          // zarz.moe kabhi kabhi {data:{url}} deta hai
+          const audioUrl = j.url || j.data?.url || j.result?.url
+          if (audioUrl) { log(`SUCCESS via ${api}`); return { url: audioUrl, title: j.filename || j.title || vid } }
+          log(`No url from ${api}: ${txt.slice(0,200)}`)
+        } catch(e:any){ log(`Fail ${api}: ${e.message}`) }
+      }
+    }
+    // 2. Agar cobalt fail to invidious fallback
     for (const proxy of PROXIES) {
       for (const inv of INVIDIOUS) {
         try {
           const apiUrl = `${inv}/api/v1/videos/${vid}`
           const proxied = proxy + encodeURIComponent(apiUrl)
-          log(`Trying ${inv} via ${proxy.includes('tgdot')?'worker':proxy.slice(8,20)}`)
+          log(`Trying INV ${inv}`)
           const r = await fetch(proxied, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(12000) })
-          const txt = await r.text()
-          let j: any = null
-          try { j = JSON.parse(txt) } catch { log(`Non JSON ${inv}: ${txt.slice(0,100)}`); continue }
-          const audios = (j.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
-          if (audios[0]?.url) { log(`SUCCESS via ${inv}`); return { url: audios[0].url, title: j.title || vid } }
-          log(`No audio in ${inv}`)
-        } catch(e:any){ log(`Fail ${inv}: ${e.message}`) }
+          const j = await r.json().catch(()=>null)
+          const audios = (j?.adaptiveFormats || []).filter((f:any)=>f.type?.startsWith('audio/')).sort((a:any,b:any)=>b.bitrate-a.bitrate)
+          if (audios[0]?.url) return { url: audios[0].url, title: j.title || vid }
+        } catch {}
       }
     }
-    throw new Error('no audio url - invidious failed')
+    throw new Error('no audio url')
   }
 
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('Access-Control-Allow-Origin', '*')
 
-  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', method: 'invidious+worker' })
+  if (path.includes('/api/ping')) return res.status(200).json({ ping: 'ok', cobalt: "https://api.zarz.moe/v1/dl/cobalt", worker: WORKER })
 
   if (path.includes('/api/search')) {
     if (!q) return res.status(200).json([])
