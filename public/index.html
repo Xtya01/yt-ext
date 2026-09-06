@@ -36,11 +36,6 @@
     <div class="bg-zinc-900 p-4 rounded-2xl"><div class="text- text-zinc-500">TOTAL HITS</div><div class="text-xl font-bold">{{stats.totalHits||0}}</div></div>
     <div class="bg-zinc-900 p-4 rounded-2xl"><div class="text- text-zinc-500">DB SIZE</div><div class="text-xl font-bold">{{stats.blobUsedKB||0}} KB</div></div>
   </div>
-
-  <div v-if="isAdmin" class="mt-6 bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-bold mb-2">Admin Panel</h2>
-    <div v-for="s in list" class="flex justify-between py-2 border-b border-zinc-800 text-sm"><span>{{s.id}} - {{s.title}}</span><button @click="del(s.id)" class="text-red-400">Delete</button></div>
-  </div>
 </div>
 
 <script>
@@ -48,11 +43,7 @@ const {createApp} = Vue
 createApp({
   data(){ return { q:'', results:[], audioUrl:'', status:'', loading:false, stats:{}, list:[], isAdmin: new URLSearchParams(location.search).get('key') } },
   async mounted(){
-    this.stats = await fetch('/api/stats').then(r=>r.json()).catch(()=>({}))
-    if(this.isAdmin){
-      const key = new URLSearchParams(location.search).get('key')
-      this.list = await fetch(`/api/admin/list?key=${key}`).then(r=>r.json()).catch(()=>[])
-    }
+    try{ this.stats = await fetch('/api/stats').then(r=>r.json()) }catch(e){}
   },
   methods:{
     async doSearch(){
@@ -62,40 +53,34 @@ createApp({
       }
       this.loading=true; this.status='Name se search ho raha hai...'
       try{
-        const raw = await fetch(`/api/search?q=${encodeURIComponent(this.q)}`).then(r=>r.json())
-        // Normalize both formats: videoId/id, thumb/thumbnail, author/uploader
-        this.results = raw.map((v:any)=>({
-          videoId: v.videoId || v.id,
-          title: v.title,
-          author: v.author || v.uploader || '',
-          thumb: v.thumb || v.thumbnail || `https://i.ytimg.com/vi/${v.videoId||v.id}/mqdefault.jpg`,
-          duration: v.duration || ''
-        }))
-        this.status = this.results.length? `${this.results.length} results mile` : 'Kuch nahi mila'
-      }catch{ this.status='Search fail' }
+        const raw = await fetch('/api/search?q='+encodeURIComponent(this.q)).then(r=>r.json())
+        this.results = raw.map(function(v){
+          return {
+            videoId: v.videoId || v.id,
+            title: v.title,
+            author: v.author || v.uploader || '',
+            thumb: v.thumb || v.thumbnail || 'https://i.ytimg.com/vi/'+(v.videoId||v.id)+'/mqdefault.jpg',
+            duration: v.duration || ''
+          }
+        })
+        this.status = this.results.length? this.results.length+' results mile' : 'Kuch nahi mila'
+      }catch(e){ this.status='Search fail' }
       this.loading=false
     },
     async play(id){
       if(!id) return
-      this.loading=true; this.status=`${id} ka audio nikal rahe...`
+      this.loading=true; this.status=id+' ka audio nikal rahe...'
       try{
-        const r = await fetch(`/api/extract?id=${id}`).then(r=>r.json())
+        const r = await fetch('/api/extract?id='+id).then(r=>r.json())
         if(r.error) throw r.error
-        this.status = r.title? `Playing: ${r.title} (${r.source||''})` : 'Playing...'
-        // NEW API returns direct_url, OLD returns telegram_file_id
+        this.status = r.title? 'Playing: '+r.title+' ('+(r.source||'')+')' : 'Playing...'
         if(r.direct_url) this.audioUrl = r.direct_url
-        else if(r.telegram_file_id) this.audioUrl = `/api/file?file_id=${r.telegram_file_id}`
+        else if(r.telegram_file_id) this.audioUrl = '/api/file?file_id='+r.telegram_file_id
         else if(r.url) this.audioUrl = r.url
         else throw 'No audio url'
-
-        this.stats = await fetch('/api/stats').then(r=>r.json()).catch(()=>this.stats)
+        try{ this.stats = await fetch('/api/stats').then(r=>r.json()) }catch(e){}
       }catch(e){ this.status='Error: '+e; console.error(e) }
       this.loading=false
-    },
-    async del(id){
-      const key = new URLSearchParams(location.search).get('key')
-      await fetch(`/api/admin/delete?key=${key}&id=${id}`)
-      this.list = this.list.filter(x=>x.id!==id)
     }
   }
 }).mount('#app')
