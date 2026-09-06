@@ -5,5 +5,8 @@
     { "source": "/api/stats", "destination": "/api/index.ts" },
     { "source": "/api/file", "destination": "/api/index.ts" },
     { "source": "/api/ping", "destination": "/api/index.ts" }
-  ]
+  ],
+  "functions": {
+    "api/index.ts": { "maxDuration": 30 }
+  }
 }
